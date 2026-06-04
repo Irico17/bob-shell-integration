@@ -1,0 +1,178 @@
+# ============================================================================
+# GitHub Workflow: Review Commit on Push
+# ============================================================================
+#
+# PURPOSE:
+# Analyzes code changes in each commit pushed to any branch using Bob Shell
+# with custom skills. Provides immediate feedback on code quality.
+#
+# WORKFLOW STEPS:
+# 1. Trigger: Activated on every push to any branch
+# 2. Get commit diff
+# 3. Load custom skills
+# 4. Run Bob review on the changes
+# 5. Post results as commit comment
+#
+# REQUIREMENTS:
+# - GitHub Secrets: BOBSHELL_API_KEY
+# - Skills: .bob/skills/*/SKILL.md files
+#
+# USAGE:
+# Runs automatically on every push
+#
+# ============================================================================
+
+name: Review Commit on Push
+
+on:
+  push:
+    branches:
+      - '**'  # All branches
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+
+jobs:
+  review-commit:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      issues: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need parent commit for diff
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
+      - name: Install Bob Shell
+        run: |
+          curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash -s -- --package-manager npm
+          if command -v bob &> /dev/null; then
+            echo "Bob Shell installed"
+            bob --version
+          else
+            echo "Bob Shell installation failed"
+            exit 1
+          fi
+      
+      - name: Authenticate Bob Shell
+        env:
+          BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
+        run: |
+          bob auth login --api-key "$BOBSHELL_API_KEY"
+      
+      - name: Load Custom Skills
+        id: load_skills
+        run: |
+          echo "Loading custom skills..."
+          SKILLS_CONTENT=""
+          SKILL_COUNT=0
+          
+          for skill_dir in .bob/skills/*/; do
+            if [ -d "$skill_dir" ]; then
+              skill_file="${skill_dir}SKILL.md"
+              if [ -f "$skill_file" ]; then
+                skill_name=$(basename "$skill_dir")
+                echo "Loading: $skill_name"
+                SKILLS_CONTENT="${SKILLS_CONTENT}\n\n# $skill_name\n\n"
+                SKILLS_CONTENT="${SKILLS_CONTENT}$(cat $skill_file)"
+                SKILL_COUNT=$((SKILL_COUNT + 1))
+              fi
+            fi
+          done
+          
+          echo "Loaded ${SKILL_COUNT} skills"
+          echo "${SKILLS_CONTENT}" > /tmp/skills_context.md
+      
+      - name: Get Commit Diff
+        id: commit_diff
+        run: |
+          echo "Getting commit diff..."
+          
+          # Get the diff for this commit
+          git diff HEAD~1 HEAD > /tmp/commit_diff.txt
+          
+          # Get changed files
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | tr '\n' ', ')
+          
+          # Get commit info
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          COMMIT_AUTHOR=$(git log -1 --pretty=%an)
+          COMMIT_SHA=$(git log -1 --pretty=%H)
+          
+          echo "changed_files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
+          echo "commit_msg=${COMMIT_MSG}" >> $GITHUB_OUTPUT
+          echo "commit_author=${COMMIT_AUTHOR}" >> $GITHUB_OUTPUT
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+      
+      - name: Create Review Prompt
+        run: |
+          echo "# Commit Review Request" > /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "Analyze this commit for code quality issues using custom review rules." >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "## Commit Information" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "- **Repository**: ${{ github.repository }}" >> /tmp/review_prompt.md
+          echo "- **Branch**: ${{ github.ref_name }}" >> /tmp/review_prompt.md
+          echo "- **Commit**: ${{ steps.commit_diff.outputs.commit_sha }}" >> /tmp/review_prompt.md
+          echo "- **Author**: ${{ steps.commit_diff.outputs.commit_author }}" >> /tmp/review_prompt.md
+          echo "- **Message**: ${{ steps.commit_diff.outputs.commit_msg }}" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "## Changed Files" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "${{ steps.commit_diff.outputs.changed_files }}" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "## Review Rules" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          
+          if [ -f /tmp/skills_context.md ]; then
+            cat /tmp/skills_context.md >> /tmp/review_prompt.md
+          fi
+          
+          echo "" >> /tmp/review_prompt.md
+          echo "## Code Changes" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo '```diff' >> /tmp/review_prompt.md
+          cat /tmp/commit_diff.txt >> /tmp/review_prompt.md
+          echo '```' >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "## Instructions" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "1. Analyze the code changes" >> /tmp/review_prompt.md
+          echo "2. Apply all custom review rules" >> /tmp/review_prompt.md
+          echo "3. Identify issues by severity" >> /tmp/review_prompt.md
+          echo "4. Provide specific recommendations" >> /tmp/review_prompt.md
+          echo "5. Keep feedback concise and actionable" >> /tmp/review_prompt.md
+      
+      - name: Run Bob Review
+        id: bob_review
+        run: |
+          echo "Running Bob review..."
+          bob ask "$(cat /tmp/review_prompt.md)" > /tmp/bob_review.md
+          echo "Review complete"
+      
+      - name: Post Review as Commit Comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const review = fs.readFileSync('/tmp/bob_review.md', 'utf8');
+            
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: '${{ steps.commit_diff.outputs.commit_sha }}',
+              body: `## Bob Shell Commit Review\n\n${review}`
+            });
+
+# Made with Bob
