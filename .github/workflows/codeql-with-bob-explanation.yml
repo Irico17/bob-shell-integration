@@ -127,42 +127,41 @@ jobs:
           echo '```' >> /tmp/bob_prompt.txt
           
           # Append rest of prompt
-          cat >> /tmp/bob_prompt.txt <<'EOF'
-
-## Your Task
-
-For each finding, provide:
-
-1. **Vulnerability Name**: Clear, simple name
-2. **Severity**: Critical/High/Medium/Low
-3. **What it means**: Explain in simple terms (2-3 sentences)
-4. **Why it's dangerous**: Real-world impact
-5. **How to fix**: Specific code changes needed
-6. **Example**: Show vulnerable code vs secure code
-
-## Output Format
-
-Use this markdown structure:
-### Critical Findings
-
-
-#### [Vulnerability Name]
-- **File**: path/to/file.ext:line
-- **Severity**: Critical
-- **Explanation**: [Simple explanation]
-- **Risk**: [Why it's dangerous]
-- **Fix**: [How to fix it]
-- **Example**: Show vulnerable code vs secure code
-
----
-
-Repeat for all findings, grouped by severity.
-
-At the end, provide:
-
-### Summary
-- Total findings: X
-- Critical: X
+          echo "" >> /tmp/bob_prompt.txt
+          echo "## Your Task" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "For each finding, provide:" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "1. **Vulnerability Name**: Clear, simple name" >> /tmp/bob_prompt.txt
+          echo "2. **Severity**: Critical/High/Medium/Low" >> /tmp/bob_prompt.txt
+          echo "3. **What it means**: Explain in simple terms (2-3 sentences)" >> /tmp/bob_prompt.txt
+          echo "4. **Why it's dangerous**: Real-world impact" >> /tmp/bob_prompt.txt
+          echo "5. **How to fix**: Specific code changes needed" >> /tmp/bob_prompt.txt
+          echo "6. **Example**: Show vulnerable code vs secure code" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "## Output Format" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "Use this markdown structure:" >> /tmp/bob_prompt.txt
+          echo "### Critical Findings" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "#### [Vulnerability Name]" >> /tmp/bob_prompt.txt
+          echo "- **File**: path/to/file.ext:line" >> /tmp/bob_prompt.txt
+          echo "- **Severity**: Critical" >> /tmp/bob_prompt.txt
+          echo "- **Explanation**: [Simple explanation]" >> /tmp/bob_prompt.txt
+          echo "- **Risk**: [Why it's dangerous]" >> /tmp/bob_prompt.txt
+          echo "- **Fix**: [How to fix it]" >> /tmp/bob_prompt.txt
+          echo "- **Example**: Show vulnerable code vs secure code" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "---" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "Repeat for all findings, grouped by severity." >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "At the end, provide:" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "### Summary" >> /tmp/bob_prompt.txt
+          echo "- Total findings: X" >> /tmp/bob_prompt.txt
+          echo "- Critical: X" >> /tmp/bob_prompt.txt
 - High: X
 - Medium: X
 - Low: X

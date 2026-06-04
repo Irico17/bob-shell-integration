@@ -181,33 +181,30 @@ jobs:
           fi
           
           # Append PR diff
-          cat >> /tmp/review_prompt.md <<'DIFF_EOF'
-
-## Code Changes to Review
-
-DIFF_EOF
-          
+          echo "" >> /tmp/review_prompt.md
+          echo "## Code Changes to Review" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
           echo '```diff' >> /tmp/review_prompt.md
           cat /tmp/pr_diff.txt >> /tmp/review_prompt.md
           echo '```' >> /tmp/review_prompt.md
           
-          cat >> /tmp/review_prompt.md <<'END_EOF'
-
-## Review Instructions
-
-1. Analyze ALL code changes in the diff above
-2. Apply ALL review rules from the custom skills
-3. Identify violations by severity: Critical, High, Medium, Low
-4. For each finding, provide:
-   - **File and Line**: Exact location
-   - **Rule Violated**: Which rule from skills
-   - **Severity**: Critical/High/Medium/Low
-   - **Issue**: Clear description of the problem
-   - **Recommendation**: Specific fix suggestion
-   - **Example**: Show correct code if applicable
-
-5. Provide a summary with:
-   - Total findings by severity
+          # Append review instructions
+          echo "" >> /tmp/review_prompt.md
+          echo "## Review Instructions" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "1. Analyze ALL code changes in the diff above" >> /tmp/review_prompt.md
+          echo "2. Apply ALL review rules from the custom skills" >> /tmp/review_prompt.md
+          echo "3. Identify violations by severity: Critical, High, Medium, Low" >> /tmp/review_prompt.md
+          echo "4. For each finding, provide:" >> /tmp/review_prompt.md
+          echo "   - **File and Line**: Exact location" >> /tmp/review_prompt.md
+          echo "   - **Rule Violated**: Which rule from skills" >> /tmp/review_prompt.md
+          echo "   - **Severity**: Critical/High/Medium/Low" >> /tmp/review_prompt.md
+          echo "   - **Issue**: Clear description of the problem" >> /tmp/review_prompt.md
+          echo "   - **Recommendation**: Specific fix suggestion" >> /tmp/review_prompt.md
+          echo "   - **Example**: Show correct code if applicable" >> /tmp/review_prompt.md
+          echo "" >> /tmp/review_prompt.md
+          echo "5. Provide a summary with:" >> /tmp/review_prompt.md
+          echo "   - Total findings by severity" >> /tmp/review_prompt.md
    - Overall code quality score (1-10)
    - Top 3 priority fixes
    - Recommendation: Approve, Request Changes, or Comment
