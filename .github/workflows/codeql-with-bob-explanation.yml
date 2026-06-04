@@ -118,16 +118,23 @@ jobs:
           # Read alerts
           ALERTS=$(cat /tmp/codeql-alerts.json)
           
-          # Create prompt for Bob
-          PROMPT="You are a security expert explaining CodeQL findings to developers.
+          # Create prompt for Bob using heredoc
+          cat > /tmp/bob_prompt.txt <<'EOF'
+You are a security expert explaining CodeQL findings to developers.
 
 ## CodeQL Security Findings
 
 The following security vulnerabilities were detected by CodeQL:
 
-\`\`\`json
-${ALERTS}
-\`\`\`
+EOF
+          
+          # Append alerts
+          echo '```json' >> /tmp/bob_prompt.txt
+          cat /tmp/codeql-alerts.json >> /tmp/bob_prompt.txt
+          echo '```' >> /tmp/bob_prompt.txt
+          
+          # Append rest of prompt
+          cat >> /tmp/bob_prompt.txt <<'EOF'
 
 ## Your Task
 
@@ -147,19 +154,19 @@ Use this markdown structure:
 
 
 #### [Vulnerability Name]
-- **File**: \`path/to/file.ext:line\`
+- **File**: path/to/file.ext:line
 - **Severity**: Critical
 - **Explanation**: [Simple explanation]
 - **Risk**: [Why it's dangerous]
 - **Fix**: [How to fix it]
 - **Example**:
-\`\`\`language
-// ❌ Vulnerable
+```language
+// Vulnerable
 [bad code]
 
-// ✅ Secure
+// Secure
 [good code]
-\`\`\`
+```
 
 ---
 
@@ -177,10 +184,11 @@ At the end, provide:
 ### Priority Actions
 1. [Most urgent fix]
 2. [Second priority]
-3. [Third priority]"
+3. [Third priority]
+EOF
 
           # Run Bob Shell
-          echo "${PROMPT}" | bob --accept-license > /tmp/codeql-explanation.md
+          cat /tmp/bob_prompt.txt | bob --accept-license > /tmp/codeql-explanation.md
           
           echo "✓ Bob Shell explanation generated"
       

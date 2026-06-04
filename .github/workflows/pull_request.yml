@@ -1,28 +1,36 @@
-name: pull_request
+# This workflow is disabled for the Bob CI/CD Lab demo
+# It requires a Makefile with ci-pull-request target which is not part of this demo
+#
+# To enable this workflow:
+# 1. Create a Makefile in the root directory
+# 2. Add a ci-pull-request target with your CI commands
+# 3. Uncomment the workflow below
 
-on:
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  pull_request:
-    name: pull-request
-    runs-on: ubuntu-latest
-    steps:
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.11"
-    - name: install make
-      run: sudo apt-get install make
-    - name: checkout
-      uses: actions/checkout@v6
-    - name: create-venv
-      run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-    - name: run-make
-      run: |
-          source .venv/bin/activate
-          make ci-pull-request
+# name: pull_request
+#
+# on:
+#   pull_request:
+#     branches: [ main ]
+#
+# jobs:
+#   pull_request:
+#     name: pull-request
+#     runs-on: ubuntu-latest
+#     steps:
+#     - name: Set up Python 3.11
+#       uses: actions/setup-python@v3
+#       with:
+#         python-version: "3.11"
+#     - name: install make
+#       run: sudo apt-get install make
+#     - name: checkout
+#       uses: actions/checkout@v6
+#     - name: create-venv
+#       run: |
+#           python -m venv .venv
+#           source .venv/bin/activate
+#           pip install --upgrade pip
+#     - name: run-make
+#       run: |
+#           source .venv/bin/activate
+#           make ci-pull-request

@@ -147,7 +147,7 @@ jobs:
       
       - name: Create Review Prompt
         run: |
-          cat > /tmp/review_prompt.md <<'PROMPT_EOF'
+          cat > /tmp/review_prompt.md <<PROMPT_EOF
 # Code Review Request
 
 You are an expert code reviewer analyzing a Pull Request using custom review rules.
@@ -167,9 +167,9 @@ ${{ steps.pr_diff.outputs.changed_files }}
 
 ## Diff Statistics
 
-```
+\`\`\`
 ${{ steps.pr_diff.outputs.diff_stats }}
-```
+\`\`\`
 
 ## Review Rules
 
@@ -187,13 +187,13 @@ PROMPT_EOF
 
 ## Code Changes to Review
 
-```diff
 DIFF_EOF
           
+          echo '```diff' >> /tmp/review_prompt.md
           cat /tmp/pr_diff.txt >> /tmp/review_prompt.md
+          echo '```' >> /tmp/review_prompt.md
           
           cat >> /tmp/review_prompt.md <<'END_EOF'
-```
 
 ## Review Instructions
 
