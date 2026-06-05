@@ -13,7 +13,8 @@
 # 3. Load all custom skills
 # 4. Analyze all source files
 # 5. Generate comprehensive report
-# 6. Create issue with findings
+# 6. Upload report as artifact + write to Step Summary
+# 7. Create issue with findings
 #
 # REQUIREMENTS:
 # - GitHub Secrets: BOBSHELL_API_KEY
@@ -74,7 +75,13 @@ jobs:
         env:
           BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
         run: |
-          bob auth login --api-key "$BOBSHELL_API_KEY"
+          echo "Configuring Bob Shell authentication..."
+          if [ -z "$BOBSHELL_API_KEY" ]; then
+            echo "Error: BOBSHELL_API_KEY secret is not set"
+            exit 1
+          fi
+          # Bob Shell authenticates via BOBSHELL_API_KEY environment variable
+          echo "Bob Shell authentication configured successfully"
       
       - name: Load Custom Skills
         id: load_skills
@@ -126,12 +133,13 @@ jobs:
       
       - name: Analyze Files in Batches
         id: analyze
+        env:
+          BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
         run: |
           echo "Analyzing files in batches..."
           
           BATCH_SIZE=10
           BATCH_NUM=0
-          TOTAL_FILES=$(wc -l < /tmp/files_to_review.txt)
           
           mkdir -p /tmp/reviews
           
@@ -141,30 +149,35 @@ jobs:
             fi
             
             BATCH_NUM=$((BATCH_NUM + 1))
-            echo "Analyzing batch ${BATCH_NUM}..."
+            echo "Analyzing batch ${BATCH_NUM}: ${file}"
             
             # Create review prompt for this file
-            echo "# Deep Code Review" > /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "## File: ${file}" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "## Review Rules" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            cat /tmp/skills_context.md >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "## Code to Review" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo '```' >> /tmp/review_prompt_${BATCH_NUM}.md
-            cat "${file}" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo '```' >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "## Instructions" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "" >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "Perform a comprehensive review applying ALL custom rules." >> /tmp/review_prompt_${BATCH_NUM}.md
-            echo "Focus on: Security, Architecture, Code Quality, Best Practices." >> /tmp/review_prompt_${BATCH_NUM}.md
+            cat > /tmp/review_prompt_${BATCH_NUM}.md << PROMPT_EOF
+# Deep Code Review
+
+## File: ${file}
+
+## Review Rules
+
+$(cat /tmp/skills_context.md)
+
+## Code to Review
+
+\`\`\`
+$(cat "${file}")
+\`\`\`
+
+## Instructions
+
+Perform a comprehensive review applying ALL custom rules.
+Focus on: Security vulnerabilities, Architecture issues, Code Quality, Best Practices.
+For each issue found, specify: severity (CRITICAL/HIGH/MEDIUM/LOW), location (line number if possible), and recommended fix.
+PROMPT_EOF
             
-            # Run Bob review
-            bob ask "$(cat /tmp/review_prompt_${BATCH_NUM}.md)" > /tmp/reviews/review_${BATCH_NUM}.md
+            # Run Bob review using positional prompt (correct syntax)
+            bob --accept-license "$(cat /tmp/review_prompt_${BATCH_NUM}.md)" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1 || {
+              echo "Warning: Bob analysis for ${file} failed or timed out" > /tmp/reviews/review_${BATCH_NUM}.md
+            }
             
             # Limit batches to avoid timeout
             if [ $BATCH_NUM -ge 20 ]; then
@@ -181,16 +194,19 @@ jobs:
         run: |
           echo "Generating comprehensive report..."
           
-          echo "# Deep Branch Review Report" > /tmp/final_report.md
-          echo "" >> /tmp/final_report.md
-          echo "**Branch:** ${{ github.event.inputs.branch }}" >> /tmp/final_report.md
-          echo "**Repository:** ${{ github.repository }}" >> /tmp/final_report.md
-          echo "**Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> /tmp/final_report.md
-          echo "**Files Analyzed:** ${{ steps.analyze.outputs.batch_count }}" >> /tmp/final_report.md
-          echo "**Skills Applied:** ${{ steps.load_skills.outputs.skill_count }}" >> /tmp/final_report.md
-          echo "" >> /tmp/final_report.md
-          echo "---" >> /tmp/final_report.md
-          echo "" >> /tmp/final_report.md
+          cat > /tmp/final_report.md << EOF
+# Deep Branch Review Report
+
+**Branch:** ${{ github.event.inputs.branch }}
+**Repository:** ${{ github.repository }}
+**Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+**Files Analyzed:** ${{ steps.analyze.outputs.batch_count }}
+**Skills Applied:** ${{ steps.load_skills.outputs.skill_count }}
+**Triggered by:** ${{ github.actor }}
+
+---
+
+EOF
           
           # Combine all reviews
           for review_file in /tmp/reviews/*.md; do
@@ -202,7 +218,21 @@ jobs:
             fi
           done
           
-          echo "Report generated"
+          echo "Report generated ($(wc -c < /tmp/final_report.md) bytes)"
+      
+      - name: Upload Report as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-branch-review-${{ github.event.inputs.branch }}-${{ github.run_id }}
+          path: /tmp/final_report.md
+          retention-days: 30
+
+      - name: Write Report to Step Summary
+        run: |
+          echo "## 🔍 Deep Branch Review — \`${{ github.event.inputs.branch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          # GitHub Step Summary supports up to 1MB — truncate if needed
+          head -c 900000 /tmp/final_report.md >> $GITHUB_STEP_SUMMARY
       
       - name: Create Issue with Report
         uses: actions/github-script@v7
@@ -210,16 +240,23 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const report = fs.readFileSync('/tmp/final_report.md', 'utf8');
+            let report = fs.readFileSync('/tmp/final_report.md', 'utf8');
+            
+            // GitHub issue body limit is 65535 characters — truncate with notice if needed
+            const MAX_LENGTH = 65000;
+            if (report.length > MAX_LENGTH) {
+              report = report.substring(0, MAX_LENGTH) + '\n\n---\n⚠️ Report truncated. Download the full report from the workflow artifact.';
+            }
             
             const issue = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Deep Code Review: ${context.payload.inputs.branch} branch`,
+              title: `Deep Code Review: ${context.payload.inputs.branch} branch — ${new Date().toISOString().split('T')[0]}`,
               body: report,
               labels: ['code-review', 'bob-shell', 'deep-review']
             });
             
-            console.log(`Created issue #${issue.data.number}`);
+            console.log(`Created issue #${issue.data.number}: ${issue.data.html_url}`);
+            core.summary.addLink(`View Issue #${issue.data.number}`, issue.data.html_url);
 
 # Made with Bob
