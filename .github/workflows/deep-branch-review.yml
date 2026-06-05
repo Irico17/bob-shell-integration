@@ -200,7 +200,7 @@ jobs:
             echo "  Prompt size: ${PROMPT_SIZE} bytes"
             echo "  Running Bob review..."
 
-            bob --accept-license "$(cat ${PROMPT_FILE})" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1
+            bob --accept-license "$(cat ${PROMPT_FILE})" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1 < /dev/null
             BOB_EXIT=$?
 
             REVIEW_SIZE=$(wc -c < /tmp/reviews/review_${BATCH_NUM}.md 2>/dev/null || echo 0)
