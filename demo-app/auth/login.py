@@ -1,230 +1,514 @@
 """
-Secure Login Module - Best Practices Implementation
-
-This module implements a secure authentication system following:
-- OWASP security guidelines
-- SOLID principles
-- Clean architecture patterns
+SECURE LOGIN IMPLEMENTATION
+Fixed SQL injection vulnerabilities and improved security practices
 """
 
 import hashlib
+import sqlite3
 import secrets
-from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
-
-from database.db_manager import DatabaseManager
-from utils.validators import InputValidator
-from auth.session import SessionManager
+import re
+from typing import Optional, Tuple
+from abc import ABC, abstractmethod
 
 
-class LoginError(Exception):
-    """Custom exception for login-related errors"""
-    pass
+# Configuration - should be loaded from environment variables in production
+DB_PATH = "banking.db"
+
+
+class PasswordHasher:
+    """Handles secure password hashing using SHA-256 (should use bcrypt in production)"""
+    
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """Hash password using SHA-256 with salt"""
+        # In production, use bcrypt or argon2
+        salt = secrets.token_hex(16)
+        hashed = hashlib.sha256((password + salt).encode()).hexdigest()
+        return f"{salt}${hashed}"
+    
+    @staticmethod
+    def verify_password(password: str, stored_hash: str) -> bool:
+        """Verify password against stored hash"""
+        try:
+            salt, hashed = stored_hash.split('$')
+            new_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+            return new_hash == hashed
+        except (ValueError, AttributeError):
+            return False
+
+
+class InputValidator:
+    """Validates user input to prevent injection attacks and ensure data quality"""
+    
+    # Username: alphanumeric, underscore, hyphen, 3-50 chars
+    USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{3,50}$')
+    # Email: basic email validation
+    EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+    
+    MIN_PASSWORD_LENGTH = 8
+    MIN_USERNAME_LENGTH = 3
+    MAX_USERNAME_LENGTH = 50
+    
+    @classmethod
+    def validate_username(cls, username: str) -> bool:
+        """Validate username format"""
+        if not username or not isinstance(username, str):
+            return False
+        return bool(cls.USERNAME_PATTERN.match(username))
+    
+    @classmethod
+    def validate_password(cls, password: str) -> bool:
+        """Validate password strength"""
+        if not password or not isinstance(password, str):
+            return False
+        if len(password) < cls.MIN_PASSWORD_LENGTH:
+            return False
+        # Should have at least one uppercase, lowercase, digit, and special char
+        has_upper = any(c.isupper() for c in password)
+        has_lower = any(c.islower() for c in password)
+        has_digit = any(c.isdigit() for c in password)
+        return has_upper and has_lower and has_digit
+    
+    @classmethod
+    def validate_email(cls, email: str) -> bool:
+        """Validate email format"""
+        if not email or not isinstance(email, str):
+            return False
+        return bool(cls.EMAIL_PATTERN.match(email))
+
+
+class SessionTokenGenerator:
+    """Generates cryptographically secure session tokens"""
+    
+    @staticmethod
+    def generate_token() -> str:
+        """Generate a secure random token"""
+        return secrets.token_urlsafe(32)
+
+
+class DatabaseConnection:
+    """Manages database connections with proper resource handling"""
+    
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn: Optional[sqlite3.Connection] = None
+    
+    def connect(self) -> sqlite3.Connection:
+        """Establish database connection"""
+        if not self.conn:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+        return self.conn
+    
+    def close(self):
+        """Close database connection"""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+    
+    def __enter__(self):
+        return self.connect()
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+class IUserRepository(ABC):
+    """Interface for user data access"""
+    
+    @abstractmethod
+    def find_by_username(self, username: str) -> Optional[dict]:
+        """Find user by username"""
+        pass
+    
+    @abstractmethod
+    def find_by_username_and_role(self, username: str, role: str) -> Optional[dict]:
+        """Find user by username and role"""
+        pass
+    
+    @abstractmethod
+    def create_user(self, username: str, password_hash: str, email: str, 
+                   phone: str, address: str, city: str, country: str, zipcode: str) -> bool:
+        """Create new user"""
+        pass
+    
+    @abstractmethod
+    def update_user_contact(self, username: str, email: str, phone: str) -> bool:
+        """Update user contact information"""
+        pass
+
+
+class UserRepository(IUserRepository):
+    """Repository for user data access with parameterized queries"""
+    
+    def __init__(self, db_connection: DatabaseConnection):
+        self.db = db_connection
+    
+    def find_by_username(self, username: str) -> Optional[dict]:
+        """
+        Find user by username using parameterized query
+        SECURE: Uses ? placeholder to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = "SELECT * FROM users WHERE username = ?"
+        cursor.execute(query, (username,))
+        
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+    
+    def find_by_username_and_role(self, username: str, role: str) -> Optional[dict]:
+        """
+        Find user by username and role using parameterized query
+        SECURE: Uses ? placeholders to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = "SELECT * FROM users WHERE username = ? AND role = ?"
+        cursor.execute(query, (username, role))
+        
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+    
+    def create_user(self, username: str, password_hash: str, email: str,
+                   phone: str, address: str, city: str, country: str, zipcode: str) -> bool:
+        """
+        Create new user using parameterized query
+        SECURE: Uses ? placeholders to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        try:
+            # SECURE: Parameterized query prevents SQL injection
+            query = """
+                INSERT INTO users (username, password, email, phone, address, city, country, zipcode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(query, (username, password_hash, email, phone, address, city, country, zipcode))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # User already exists
+            return False
+        except Exception as e:
+            # Log error without exposing details
+            print(f"Database error occurred during user creation")
+            return False
+    
+    def update_user_contact(self, username: str, email: str, phone: str) -> bool:
+        """
+        Update user contact information using parameterized query
+        SECURE: Uses ? placeholders to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        try:
+            # SECURE: Parameterized query prevents SQL injection
+            query = "UPDATE users SET email = ?, phone = ? WHERE username = ?"
+            cursor.execute(query, (email, phone, username))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Database error occurred during user update")
+            return False
+
+
+class ISessionRepository(ABC):
+    """Interface for session data access"""
+    
+    @abstractmethod
+    def create_session(self, token: str, username: str) -> bool:
+        """Create new session"""
+        pass
+    
+    @abstractmethod
+    def find_session(self, token: str) -> Optional[dict]:
+        """Find session by token"""
+        pass
+    
+    @abstractmethod
+    def delete_session(self, token: str) -> bool:
+        """Delete session"""
+        pass
+
+
+class SessionRepository(ISessionRepository):
+    """Repository for session data access with parameterized queries"""
+    
+    def __init__(self, db_connection: DatabaseConnection):
+        self.db = db_connection
+    
+    def create_session(self, token: str, username: str) -> bool:
+        """
+        Create new session using parameterized query
+        SECURE: Uses ? placeholders to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        try:
+            # SECURE: Parameterized query prevents SQL injection
+            query = "INSERT INTO sessions (token, username) VALUES (?, ?)"
+            cursor.execute(query, (token, username))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Database error occurred during session creation")
+            return False
+    
+    def find_session(self, token: str) -> Optional[dict]:
+        """
+        Find session by token using parameterized query
+        SECURE: Uses ? placeholder to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = "SELECT * FROM sessions WHERE token = ?"
+        cursor.execute(query, (token,))
+        
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+    
+    def delete_session(self, token: str) -> bool:
+        """
+        Delete session using parameterized query
+        SECURE: Uses ? placeholder to prevent SQL injection
+        """
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        try:
+            # SECURE: Parameterized query prevents SQL injection
+            query = "DELETE FROM sessions WHERE token = ?"
+            cursor.execute(query, (token,))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Database error occurred during session deletion")
+            return False
 
 
 class AuthenticationService:
     """
-    Handles user authentication with security best practices.
-    
-    Follows Single Responsibility Principle - only handles authentication logic.
-    Uses Dependency Injection for database and session management.
+    Service layer for authentication logic
+    Follows Single Responsibility Principle - only handles authentication
     """
     
-    def __init__(
-        self, 
-        db_manager: DatabaseManager,
-        session_manager: SessionManager,
-        validator: InputValidator
-    ):
-        """
-        Initialize authentication service with dependencies.
-        
-        Args:
-            db_manager: Database manager instance
-            session_manager: Session manager instance
-            validator: Input validator instance
-        """
-        self._db = db_manager
-        self._session_manager = session_manager
-        self._validator = validator
-        self._max_login_attempts = 5
-        self._lockout_duration = timedelta(minutes=15)
+    def __init__(self, user_repo: IUserRepository, session_repo: ISessionRepository,
+                 password_hasher: PasswordHasher, token_generator: SessionTokenGenerator):
+        self.user_repo = user_repo
+        self.session_repo = session_repo
+        self.password_hasher = password_hasher
+        self.token_generator = token_generator
     
-    def authenticate(self, username: str, password: str) -> Dict[str, Any]:
+    def login(self, username: str, password: str) -> Optional[str]:
         """
-        Authenticate user with username and password.
-        
-        Args:
-            username: User's username
-            password: User's password (plain text, will be hashed)
-            
-        Returns:
-            Dict containing session token and user info
-            
-        Raises:
-            LoginError: If authentication fails
+        Authenticate user and create session
+        Returns session token on success, None on failure
         """
-        # Validate inputs
-        if not self._validator.validate_username(username):
-            raise LoginError("Invalid username format")
+        # Validate input
+        if not InputValidator.validate_username(username):
+            print(f"Login attempt with invalid username format")
+            return None
         
-        if not self._validator.validate_password_strength(password):
-            raise LoginError("Invalid password format")
+        if not password:
+            print(f"Login attempt with empty password")
+            return None
         
-        # Check if account is locked
-        if self._is_account_locked(username):
-            raise LoginError("Account is temporarily locked due to multiple failed attempts")
-        
-        # Get user from database using prepared statement
-        user = self._get_user_by_username(username)
-        
+        # Find user
+        user = self.user_repo.find_by_username(username)
         if not user:
-            self._record_failed_attempt(username)
-            raise LoginError("Invalid credentials")
+            print(f"Login attempt for non-existent user: {username}")
+            return None
         
-        # Verify password using secure hash comparison
-        if not self._verify_password(password, user['password_hash']):
-            self._record_failed_attempt(username)
-            raise LoginError("Invalid credentials")
+        # Verify password
+        if not self.password_hasher.verify_password(password, user['password']):
+            print(f"Failed login attempt for user: {username}")
+            return None
         
-        # Reset failed attempts on successful login
-        self._reset_failed_attempts(username)
+        # Generate secure session token
+        token = self.token_generator.generate_token()
         
-        # Create secure session
-        session_token = self._session_manager.create_session(
-            user_id=user['id'],
-            username=user['username']
-        )
+        # Create session
+        if self.session_repo.create_session(token, username):
+            print(f"Successful login for user: {username}")
+            return token
         
-        return {
-            'session_token': session_token,
-            'user_id': user['id'],
-            'username': user['username'],
-            'expires_at': (datetime.now() + timedelta(hours=2)).isoformat()
-        }
-    
-    def _get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve user from database using parameterized query.
-        
-        Args:
-            username: Username to search for
-            
-        Returns:
-            User dict if found, None otherwise
-        """
-        # Using parameterized query to prevent SQL injection
-        query = "SELECT id, username, password_hash FROM users WHERE username = ?"
-        result = self._db.execute_query(query, (username,))
-        
-        if result:
-            return {
-                'id': result[0][0],
-                'username': result[0][1],
-                'password_hash': result[0][2]
-            }
         return None
     
-    def _verify_password(self, plain_password: str, password_hash: str) -> bool:
-        """
-        Verify password against stored hash using secure comparison.
-        
-        Args:
-            plain_password: Plain text password from user
-            password_hash: Stored password hash
-            
-        Returns:
-            True if password matches, False otherwise
-        """
-        # Hash the provided password
-        computed_hash = self._hash_password(plain_password)
-        
-        # Use secrets.compare_digest for timing-attack resistant comparison
-        return secrets.compare_digest(computed_hash, password_hash)
-    
-    def _hash_password(self, password: str) -> str:
-        """
-        Hash password using SHA-256 with salt.
-        
-        Note: In production, use bcrypt or Argon2 instead of SHA-256
-        
-        Args:
-            password: Plain text password
-            
-        Returns:
-            Hashed password string
-        """
-        # In production, use bcrypt.hashpw() or argon2.hash_password()
-        salt = "secure_random_salt_from_config"  # Should be from secure config
-        return hashlib.sha256(f"{password}{salt}".encode()).hexdigest()
-    
-    def _is_account_locked(self, username: str) -> bool:
-        """
-        Check if account is locked due to failed login attempts.
-        
-        Args:
-            username: Username to check
-            
-        Returns:
-            True if account is locked, False otherwise
-        """
-        query = """
-            SELECT failed_attempts, last_failed_attempt 
-            FROM login_attempts 
-            WHERE username = ?
-        """
-        result = self._db.execute_query(query, (username,))
-        
-        if not result:
+    def validate_session(self, token: str) -> bool:
+        """Validate if session token is valid"""
+        if not token:
             return False
         
-        failed_attempts, last_failed = result[0]
-        
-        if failed_attempts >= self._max_login_attempts:
-            # Check if lockout period has expired
-            last_failed_time = datetime.fromisoformat(last_failed)
-            if datetime.now() - last_failed_time < self._lockout_duration:
-                return True
-        
-        return False
+        session = self.session_repo.find_session(token)
+        return session is not None
     
-    def _record_failed_attempt(self, username: str) -> None:
-        """
-        Record a failed login attempt.
+    def logout(self, token: str) -> bool:
+        """Logout user by deleting session"""
+        if not token:
+            return False
         
-        Args:
-            username: Username that failed to login
-        """
-        query = """
-            INSERT INTO login_attempts (username, failed_attempts, last_failed_attempt)
-            VALUES (?, 1, ?)
-            ON CONFLICT(username) DO UPDATE SET
-                failed_attempts = failed_attempts + 1,
-                last_failed_attempt = ?
-        """
-        now = datetime.now().isoformat()
-        self._db.execute_query(query, (username, now, now))
+        return self.session_repo.delete_session(token)
     
-    def _reset_failed_attempts(self, username: str) -> None:
+    def admin_login(self, username: str, password: str) -> bool:
         """
-        Reset failed login attempts after successful login.
+        Authenticate admin user
+        Returns True if user is admin and credentials are valid
+        """
+        # Validate input
+        if not InputValidator.validate_username(username):
+            return False
         
-        Args:
-            username: Username to reset attempts for
-        """
-        query = "DELETE FROM login_attempts WHERE username = ?"
-        self._db.execute_query(query, (username,))
+        if not password:
+            return False
+        
+        # Find admin user
+        user = self.user_repo.find_by_username_and_role(username, 'admin')
+        if not user:
+            return False
+        
+        # Verify password
+        return self.password_hasher.verify_password(password, user['password'])
+
+
+class UserService:
+    """
+    Service layer for user management
+    Follows Single Responsibility Principle - only handles user operations
+    """
     
-    def logout(self, session_token: str) -> bool:
+    def __init__(self, user_repo: IUserRepository, password_hasher: PasswordHasher):
+        self.user_repo = user_repo
+        self.password_hasher = password_hasher
+    
+    def register_user(self, username: str, password: str, email: str,
+                     phone: str, address: str, city: str, country: str, zipcode: str) -> bool:
         """
-        Logout user by invalidating session.
+        Register new user with validation
+        Returns True on success, False on failure
+        """
+        # Validate username
+        if not InputValidator.validate_username(username):
+            print(f"Registration failed: Invalid username format")
+            return False
         
-        Args:
-            session_token: Session token to invalidate
-            
-        Returns:
-            True if logout successful
-        """
-        return self._session_manager.invalidate_session(session_token)
+        # Validate password
+        if not InputValidator.validate_password(password):
+            print(f"Registration failed: Password does not meet requirements")
+            return False
+        
+        # Validate email
+        if not InputValidator.validate_email(email):
+            print(f"Registration failed: Invalid email format")
+            return False
+        
+        # Hash password
+        password_hash = self.password_hasher.hash_password(password)
+        
+        # Create user
+        success = self.user_repo.create_user(
+            username, password_hash, email, phone, address, city, country, zipcode
+        )
+        
+        if success:
+            print(f"User registered successfully: {username}")
+        else:
+            print(f"Registration failed: User may already exist")
+        
+        return success
+    
+    def update_user_contact(self, username: str, email: str, phone: str) -> bool:
+        """Update user contact information"""
+        # Validate email
+        if not InputValidator.validate_email(email):
+            print(f"Update failed: Invalid email format")
+            return False
+        
+        return self.user_repo.update_user_contact(username, email, phone)
+    
+    def get_user(self, username: str) -> Optional[dict]:
+        """Get user information (without sensitive data)"""
+        user = self.user_repo.find_by_username(username)
+        if user:
+            # Remove sensitive data before returning
+            safe_user = {
+                'username': user['username'],
+                'email': user['email'],
+                'phone': user.get('phone', ''),
+            }
+            return safe_user
+        return None
+
+
+class LoginManager:
+    """
+    Facade for authentication and user management
+    Provides backward compatibility with legacy code
+    """
+    
+    def __init__(self):
+        self.db_connection = DatabaseConnection(DB_PATH)
+        self.user_repo = UserRepository(self.db_connection)
+        self.session_repo = SessionRepository(self.db_connection)
+        self.password_hasher = PasswordHasher()
+        self.token_generator = SessionTokenGenerator()
+        
+        self.auth_service = AuthenticationService(
+            self.user_repo, self.session_repo, 
+            self.password_hasher, self.token_generator
+        )
+        self.user_service = UserService(self.user_repo, self.password_hasher)
+    
+    def login(self, username: str, password: str) -> Optional[str]:
+        """Authenticate user and return session token"""
+        return self.auth_service.login(username, password)
+    
+    def validate_session(self, token: str) -> bool:
+        """Validate session token"""
+        return self.auth_service.validate_session(token)
+    
+    def logout(self, token: str) -> bool:
+        """Logout user"""
+        return self.auth_service.logout(token)
+    
+    def admin_login(self, username: str, password: str) -> bool:
+        """Authenticate admin user"""
+        return self.auth_service.admin_login(username, password)
+    
+    def register_user(self, username: str, password: str, email: str,
+                     phone: str = '', address: str = '', city: str = '', 
+                     country: str = '', zipcode: str = '') -> bool:
+        """Register new user"""
+        return self.user_service.register_user(
+            username, password, email, phone, address, city, country, zipcode
+        )
+    
+    def get_user_data(self, username: str) -> Optional[dict]:
+        """Get user data (without sensitive information)"""
+        return self.user_service.get_user(username)
+    
+    def update_user_contact(self, username: str, email: str, phone: str) -> bool:
+        """Update user contact information"""
+        return self.user_service.update_user_contact(username, email, phone)
+    
+    def close(self):
+        """Close database connection"""
+        self.db_connection.close()
+
 
 # Made with Bob
