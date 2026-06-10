@@ -1,255 +1,277 @@
 """
-BAD PRACTICES LOGIN - FOR DEMO PURPOSES ONLY
-This code intentionally contains multiple security vulnerabilities and bad practices
+Secure Authentication Module - Fixed SQL Injection Vulnerabilities
+This module provides secure authentication using parameterized queries and bcrypt password hashing
 """
 
-import hashlib
-import sqlite3
+import os
+import logging
+from typing import Optional
 
-# SECURITY ISSUE: Hardcoded credentials
-DB_PATH = "banking.db"
-ADMIN_PASSWORD = "admin123"  # Hardcoded password
-SECRET_KEY = "my-secret-key-12345"  # Hardcoded secret
+from demo_app.database.db_manager import DatabaseManager
+from demo_app.auth.user_repository import UserRepository, User
+from demo_app.auth.session_repository import SessionRepository
+from demo_app.auth.authentication_service import (
+    AuthenticationService,
+    InvalidCredentialsError,
+    AccountLockedError
+)
+from demo_app.auth.validators import InputValidator, ValidationError
 
-class LoginManager:
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class SecureLoginManager:
     """
-    ARCHITECTURE ISSUE: God class - does too many things
-    - Database management
-    - Authentication
-    - Session management
-    - Logging
-    - Validation
+    Secure login manager that uses dependency injection and follows SOLID principles.
+    
+    SECURITY FIXES:
+    - All SQL queries use parameterized statements (prevents SQL injection)
+    - Passwords hashed with bcrypt (secure password storage)
+    - No hardcoded credentials (uses environment variables)
+    - Input validation on all user inputs
+    - Secure session token generation using secrets module
+    - Account lockout after failed attempts
+    - No sensitive data in logs
+    
+    ARCHITECTURE IMPROVEMENTS:
+    - Follows Single Responsibility Principle (separated concerns)
+    - Uses Dependency Injection (testable and flexible)
+    - Repository pattern for data access
+    - Service layer for business logic
+    - Clear separation of concerns
     """
     
-    def __init__(self):
-        self.conn = sqlite3.connect(DB_PATH)
-        self.cursor = self.conn.cursor()
-        self.x = 0  # BAD NAMING: unclear variable name
-        self.data = {}  # BAD NAMING: too generic
-        self.temp = None  # BAD NAMING: meaningless
+    def __init__(self, db_path: Optional[str] = None):
+        """
+        Initialize secure login manager with dependency injection.
+        
+        Args:
+            db_path: Optional path to database file. Uses environment variable or default.
+        """
+        # Get database path from environment or use default
+        if db_path is None:
+            db_path = os.getenv('DB_PATH', 'banking_app.db')
+        
+        # Initialize dependencies
+        self.db_manager = DatabaseManager(db_path)
+        self.user_repo = UserRepository(self.db_manager)
+        self.session_repo = SessionRepository(self.db_manager)
+        self.validator = InputValidator()
+        self.auth_service = AuthenticationService(
+            self.user_repo,
+            self.session_repo,
+            self.validator
+        )
     
-    # SOLID VIOLATION: Single Responsibility - this class does everything
-    def login(self, username, password):
+    def login(self, username: str, password: str) -> Optional[str]:
         """
-        SECURITY ISSUE: SQL Injection vulnerability
-        CODE QUALITY: Function too long, no documentation
+        Authenticate user with secure parameterized queries.
+        
+        SECURITY: All database queries use parameterized statements.
+        SECURITY: Passwords verified using bcrypt.
+        SECURITY: No sensitive data logged.
+        
+        Args:
+            username: Username to authenticate
+            password: Plain text password (will be verified against bcrypt hash)
+            
+        Returns:
+            Session token if authentication successful, None otherwise
         """
-        # SECURITY ISSUE: No input validation
-        # SECURITY ISSUE: SQL injection through string concatenation
-        query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
-        
-        # SECURITY ISSUE: Logging sensitive data
-        print(f"Login attempt: {username} with password: {password}")
-        
-        result = self.cursor.execute(query)
-        user = result.fetchone()
-        
-        if user:
-            # SECURITY ISSUE: Predictable session token
-            token = hashlib.md5(username.encode()).hexdigest()
+        try:
+            # Authentication service handles all security checks
+            # Uses parameterized queries internally
+            token = self.auth_service.login(username, password)
             
-            # ARCHITECTURE ISSUE: Tight coupling - direct database access
-            self.cursor.execute(f"INSERT INTO sessions VALUES ('{token}', '{username}')")
-            self.conn.commit()
-            
-            # CODE QUALITY: Magic number
-            self.x = 1
+            # Log successful login (no sensitive data)
+            logger.info(f"Successful login for user: {username}")
             
             return token
-        else:
-            # CODE QUALITY: Magic number
-            self.x = 0
+            
+        except ValidationError as e:
+            logger.warning(f"Login validation failed: {e}")
+            return None
+            
+        except InvalidCredentialsError as e:
+            logger.warning(f"Invalid credentials for user: {username}")
+            return None
+            
+        except AccountLockedError as e:
+            logger.warning(f"Account locked for user: {username}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Unexpected error during login: {e}")
             return None
     
-    # SOLID VIOLATION: Open/Closed Principle - hard to extend
-    def check_user(self, username, password):
+    def logout(self, token: str) -> bool:
         """
-        DUPLICATE CODE: Similar to login() method
-        SECURITY ISSUE: Same SQL injection vulnerability
-        """
-        query = f"SELECT * FROM users WHERE username = '{username}'"
-        result = self.cursor.execute(query)
-        user = result.fetchone()
+        Logout user by invalidating session.
         
-        if user:
-            # SECURITY ISSUE: Weak password hashing
-            hashed = hashlib.md5(password.encode()).hexdigest()
-            if user[2] == hashed:
-                return True
-        return False
-    
-    # SOLID VIOLATION: Interface Segregation - forcing unnecessary methods
-    def admin_login(self, username, password):
-        """
-        SECURITY ISSUE: Hardcoded admin check
-        CODE QUALITY: Duplicate logic
-        """
-        if password == ADMIN_PASSWORD:  # Hardcoded password check
-            query = f"SELECT * FROM users WHERE username = '{username}' AND role = 'admin'"
-            result = self.cursor.execute(query)
-            return result.fetchone() is not None
-        return False
-    
-    # CODE QUALITY: Function too long (100+ lines)
-    def register_user(self, username, password, email, phone, address, city, country, zipcode):
-        """
-        ARCHITECTURE ISSUE: Too many parameters
-        CODE QUALITY: No validation
-        SECURITY ISSUE: SQL injection
-        """
-        # SECURITY ISSUE: No input validation
-        # SECURITY ISSUE: No password strength check
-        # SECURITY ISSUE: Storing password in plain text
+        SECURITY: Uses parameterized query to delete session.
         
-        # CODE QUALITY: Magic numbers everywhere
-        if len(username) < 3:
-            return False
-        
-        if len(password) < 6:
-            return False
-        
-        # SECURITY ISSUE: SQL injection
-        query = f"""
-            INSERT INTO users (username, password, email, phone, address, city, country, zipcode)
-            VALUES ('{username}', '{password}', '{email}', '{phone}', '{address}', '{city}', '{country}', '{zipcode}')
+        Args:
+            token: Session token to invalidate
+            
+        Returns:
+            True if logout successful, False otherwise
         """
-        
         try:
-            self.cursor.execute(query)
-            self.conn.commit()
+            return self.auth_service.logout(token)
             
-            # SECURITY ISSUE: Logging sensitive data
-            print(f"New user registered: {username}, password: {password}, email: {email}")
-            
-            # CODE QUALITY: Unnecessary complexity
-            self.data['last_user'] = username
-            self.data['last_email'] = email
-            self.data['last_password'] = password  # Storing password in memory
-            self.temp = username
-            
-            return True
         except Exception as e:
-            # CODE QUALITY: Catching generic exception
-            # SECURITY ISSUE: Exposing internal errors
-            print(f"Error: {e}")
+            logger.error(f"Error during logout: {e}")
             return False
     
-    # SOLID VIOLATION: Dependency Inversion - depends on concrete implementation
-    def get_user_data(self, username):
+    def validate_session(self, token: str) -> Optional[User]:
         """
-        SECURITY ISSUE: SQL injection
-        CODE QUALITY: No error handling
-        """
-        # SECURITY ISSUE: String concatenation in query
-        query = "SELECT * FROM users WHERE username = '" + username + "'"
-        result = self.cursor.execute(query)
-        return result.fetchone()
-    
-    # CODE QUALITY: Dead code - never used
-    def old_login_method(self, u, p):
-        pass
-    
-    # CODE QUALITY: Commented out code
-    # def another_old_method(self):
-    #     query = "SELECT * FROM users"
-    #     return self.cursor.execute(query)
-    
-    def validate_session(self, token):
-        """
-        SECURITY ISSUE: SQL injection
-        ARCHITECTURE ISSUE: No session expiration
-        """
-        query = f"SELECT * FROM sessions WHERE token = '{token}'"
-        result = self.cursor.execute(query)
-        return result.fetchone() is not None
-    
-    # SOLID VIOLATION: Liskov Substitution - incorrect inheritance usage
-    def logout(self, token):
-        """
-        SECURITY ISSUE: SQL injection
-        CODE QUALITY: No verification if session exists
-        """
-        query = f"DELETE FROM sessions WHERE token = '{token}'"
-        self.cursor.execute(query)
-        self.conn.commit()
-    
-    # CODE QUALITY: Method does too many things
-    def update_user_and_log_and_notify(self, username, new_email, new_phone):
-        """
-        SOLID VIOLATION: Single Responsibility
-        ARCHITECTURE ISSUE: Method name too long
-        CODE QUALITY: Does multiple unrelated things
-        """
-        # Update user
-        query = f"UPDATE users SET email = '{new_email}', phone = '{new_phone}' WHERE username = '{username}'"
-        self.cursor.execute(query)
+        Validate session token and return user.
         
-        # Log action
-        print(f"Updated user {username}")
+        SECURITY: Uses parameterized queries to check session.
         
-        # Send notification (simulated)
-        print(f"Sending email to {new_email}")
+        Args:
+            token: Session token to validate
+            
+        Returns:
+            User instance if session valid, None otherwise
+        """
+        try:
+            return self.auth_service.validate_session(token)
+            
+        except Exception as e:
+            logger.error(f"Error validating session: {e}")
+            return None
+    
+    def register(self, username: str, password: str) -> Optional[User]:
+        """
+        Register new user with secure password hashing.
         
-        # Update internal state
-        self.data['last_update'] = username
+        SECURITY: Password hashed with bcrypt before storage.
+        SECURITY: Input validation prevents injection attacks.
+        SECURITY: Uses parameterized queries for database operations.
         
-        self.conn.commit()
+        Args:
+            username: Username for new user
+            password: Plain text password (will be hashed with bcrypt)
+            
+        Returns:
+            User instance if registration successful, None otherwise
+        """
+        try:
+            user = self.auth_service.register(username, password)
+            
+            # Log registration (no sensitive data)
+            logger.info(f"New user registered: {username}")
+            
+            return user
+            
+        except ValidationError as e:
+            logger.warning(f"Registration validation failed: {e}")
+            return None
+            
+        except ValueError as e:
+            logger.warning(f"Registration failed: {e}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Unexpected error during registration: {e}")
+            return None
     
-    # CODE QUALITY: Unclear method name
-    def do_stuff(self, u, p):
+    def change_password(
+        self,
+        user_id: int,
+        old_password: str,
+        new_password: str
+    ) -> bool:
         """
-        CODE QUALITY: Meaningless name and parameters
+        Change user password securely.
+        
+        SECURITY: Verifies old password before allowing change.
+        SECURITY: New password hashed with bcrypt.
+        SECURITY: Invalidates all existing sessions after password change.
+        
+        Args:
+            user_id: ID of user changing password
+            old_password: Current password for verification
+            new_password: New password to set
+            
+        Returns:
+            True if password changed successfully, False otherwise
         """
-        return self.login(u, p)
-    
-    # ARCHITECTURE ISSUE: Mixing concerns
-    def get_user_and_calculate_score(self, username):
-        """
-        SOLID VIOLATION: Single Responsibility
-        ARCHITECTURE ISSUE: Business logic mixed with data access
-        """
-        user = self.get_user_data(username)
-        if user:
-            # CODE QUALITY: Magic numbers
-            score = len(user[1]) * 10 + len(user[2]) * 5
-            return user, score
-        return None, 0
-    
-    # SECURITY ISSUE: No rate limiting
-    # SECURITY ISSUE: No account lockout after failed attempts
-    # ARCHITECTURE ISSUE: No separation of concerns
-    # CODE QUALITY: No unit tests
-    # CODE QUALITY: No type hints
-    # CODE QUALITY: No proper documentation
+        try:
+            return self.auth_service.change_password(
+                user_id,
+                old_password,
+                new_password
+            )
+            
+        except ValidationError as e:
+            logger.warning(f"Password change validation failed: {e}")
+            return False
+            
+        except InvalidCredentialsError as e:
+            logger.warning(f"Password change failed - invalid credentials")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error changing password: {e}")
+            return False
 
-# ARCHITECTURE ISSUE: Global state
-current_user = None
-session_token = None
 
-# CODE QUALITY: Functions outside class (inconsistent structure)
-def quick_login(u, p):
+# Convenience function for backward compatibility
+def create_login_manager(db_path: Optional[str] = None) -> SecureLoginManager:
     """
-    CODE QUALITY: Inconsistent with class-based approach
-    SECURITY ISSUE: Uses global variables
+    Factory function to create SecureLoginManager instance.
+    
+    Args:
+        db_path: Optional path to database file
+        
+    Returns:
+        SecureLoginManager instance
     """
-    global current_user, session_token
-    manager = LoginManager()
-    token = manager.login(u, p)
-    if token:
-        current_user = u
-        session_token = token
-        return True
-    return False
+    return SecureLoginManager(db_path)
 
-# CODE QUALITY: Duplicate functionality
-def fast_login(username, password):
-    """
-    DUPLICATE CODE: Same as quick_login
-    """
-    global current_user
-    manager = LoginManager()
-    result = manager.login(username, password)
-    current_user = username
-    return result
+
+# Example usage demonstrating secure authentication
+if __name__ == "__main__":
+    # Create secure login manager
+    login_manager = create_login_manager()
+    
+    # Example: Register a new user
+    print("Registering new user...")
+    user = login_manager.register("testuser", "SecurePass123!")
+    
+    if user:
+        print(f"User registered successfully: {user.username}")
+        
+        # Example: Login
+        print("\nLogging in...")
+        token = login_manager.login("testuser", "SecurePass123!")
+        
+        if token:
+            print(f"Login successful! Session token: {token[:16]}...")
+            
+            # Example: Validate session
+            print("\nValidating session...")
+            validated_user = login_manager.validate_session(token)
+            
+            if validated_user:
+                print(f"Session valid for user: {validated_user.username}")
+            
+            # Example: Logout
+            print("\nLogging out...")
+            if login_manager.logout(token):
+                print("Logout successful!")
+        else:
+            print("Login failed!")
+    else:
+        print("Registration failed!")
+
 
 # Made with Bob
