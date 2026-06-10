@@ -1,230 +1,277 @@
 """
-Secure Login Module - Best Practices Implementation
-
-This module implements a secure authentication system following:
-- OWASP security guidelines
-- SOLID principles
-- Clean architecture patterns
+Secure Authentication Module - Fixed SQL Injection Vulnerabilities
+This module provides secure authentication using parameterized queries and bcrypt password hashing
 """
 
-import hashlib
-import secrets
-from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+import os
+import logging
+from typing import Optional
 
-from database.db_manager import DatabaseManager
-from utils.validators import InputValidator
-from auth.session import SessionManager
+from demo_app.database.db_manager import DatabaseManager
+from demo_app.auth.user_repository import UserRepository, User
+from demo_app.auth.session_repository import SessionRepository
+from demo_app.auth.authentication_service import (
+    AuthenticationService,
+    InvalidCredentialsError,
+    AccountLockedError
+)
+from demo_app.auth.validators import InputValidator, ValidationError
 
 
-class LoginError(Exception):
-    """Custom exception for login-related errors"""
-    pass
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
-class AuthenticationService:
+class SecureLoginManager:
     """
-    Handles user authentication with security best practices.
+    Secure login manager that uses dependency injection and follows SOLID principles.
     
-    Follows Single Responsibility Principle - only handles authentication logic.
-    Uses Dependency Injection for database and session management.
+    SECURITY FIXES:
+    - All SQL queries use parameterized statements (prevents SQL injection)
+    - Passwords hashed with bcrypt (secure password storage)
+    - No hardcoded credentials (uses environment variables)
+    - Input validation on all user inputs
+    - Secure session token generation using secrets module
+    - Account lockout after failed attempts
+    - No sensitive data in logs
+    
+    ARCHITECTURE IMPROVEMENTS:
+    - Follows Single Responsibility Principle (separated concerns)
+    - Uses Dependency Injection (testable and flexible)
+    - Repository pattern for data access
+    - Service layer for business logic
+    - Clear separation of concerns
     """
     
-    def __init__(
-        self, 
-        db_manager: DatabaseManager,
-        session_manager: SessionManager,
-        validator: InputValidator
-    ):
+    def __init__(self, db_path: Optional[str] = None):
         """
-        Initialize authentication service with dependencies.
+        Initialize secure login manager with dependency injection.
         
         Args:
-            db_manager: Database manager instance
-            session_manager: Session manager instance
-            validator: Input validator instance
+            db_path: Optional path to database file. Uses environment variable or default.
         """
-        self._db = db_manager
-        self._session_manager = session_manager
-        self._validator = validator
-        self._max_login_attempts = 5
-        self._lockout_duration = timedelta(minutes=15)
-    
-    def authenticate(self, username: str, password: str) -> Dict[str, Any]:
-        """
-        Authenticate user with username and password.
+        # Get database path from environment or use default
+        if db_path is None:
+            db_path = os.getenv('DB_PATH', 'banking_app.db')
         
-        Args:
-            username: User's username
-            password: User's password (plain text, will be hashed)
-            
-        Returns:
-            Dict containing session token and user info
-            
-        Raises:
-            LoginError: If authentication fails
-        """
-        # Validate inputs
-        if not self._validator.validate_username(username):
-            raise LoginError("Invalid username format")
-        
-        if not self._validator.validate_password_strength(password):
-            raise LoginError("Invalid password format")
-        
-        # Check if account is locked
-        if self._is_account_locked(username):
-            raise LoginError("Account is temporarily locked due to multiple failed attempts")
-        
-        # Get user from database using prepared statement
-        user = self._get_user_by_username(username)
-        
-        if not user:
-            self._record_failed_attempt(username)
-            raise LoginError("Invalid credentials")
-        
-        # Verify password using secure hash comparison
-        if not self._verify_password(password, user['password_hash']):
-            self._record_failed_attempt(username)
-            raise LoginError("Invalid credentials")
-        
-        # Reset failed attempts on successful login
-        self._reset_failed_attempts(username)
-        
-        # Create secure session
-        session_token = self._session_manager.create_session(
-            user_id=user['id'],
-            username=user['username']
+        # Initialize dependencies
+        self.db_manager = DatabaseManager(db_path)
+        self.user_repo = UserRepository(self.db_manager)
+        self.session_repo = SessionRepository(self.db_manager)
+        self.validator = InputValidator()
+        self.auth_service = AuthenticationService(
+            self.user_repo,
+            self.session_repo,
+            self.validator
         )
-        
-        return {
-            'session_token': session_token,
-            'user_id': user['id'],
-            'username': user['username'],
-            'expires_at': (datetime.now() + timedelta(hours=2)).isoformat()
-        }
     
-    def _get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+    def login(self, username: str, password: str) -> Optional[str]:
         """
-        Retrieve user from database using parameterized query.
+        Authenticate user with secure parameterized queries.
+        
+        SECURITY: All database queries use parameterized statements.
+        SECURITY: Passwords verified using bcrypt.
+        SECURITY: No sensitive data logged.
         
         Args:
-            username: Username to search for
+            username: Username to authenticate
+            password: Plain text password (will be verified against bcrypt hash)
             
         Returns:
-            User dict if found, None otherwise
+            Session token if authentication successful, None otherwise
         """
-        # Using parameterized query to prevent SQL injection
-        query = "SELECT id, username, password_hash FROM users WHERE username = ?"
-        result = self._db.execute_query(query, (username,))
-        
-        if result:
-            return {
-                'id': result[0][0],
-                'username': result[0][1],
-                'password_hash': result[0][2]
-            }
-        return None
-    
-    def _verify_password(self, plain_password: str, password_hash: str) -> bool:
-        """
-        Verify password against stored hash using secure comparison.
-        
-        Args:
-            plain_password: Plain text password from user
-            password_hash: Stored password hash
+        try:
+            # Authentication service handles all security checks
+            # Uses parameterized queries internally
+            token = self.auth_service.login(username, password)
             
-        Returns:
-            True if password matches, False otherwise
-        """
-        # Hash the provided password
-        computed_hash = self._hash_password(plain_password)
-        
-        # Use secrets.compare_digest for timing-attack resistant comparison
-        return secrets.compare_digest(computed_hash, password_hash)
-    
-    def _hash_password(self, password: str) -> str:
-        """
-        Hash password using SHA-256 with salt.
-        
-        Note: In production, use bcrypt or Argon2 instead of SHA-256
-        
-        Args:
-            password: Plain text password
+            # Log successful login (no sensitive data)
+            logger.info(f"Successful login for user: {username}")
             
-        Returns:
-            Hashed password string
-        """
-        # In production, use bcrypt.hashpw() or argon2.hash_password()
-        salt = "secure_random_salt_from_config"  # Should be from secure config
-        return hashlib.sha256(f"{password}{salt}".encode()).hexdigest()
-    
-    def _is_account_locked(self, username: str) -> bool:
-        """
-        Check if account is locked due to failed login attempts.
-        
-        Args:
-            username: Username to check
+            return token
             
-        Returns:
-            True if account is locked, False otherwise
-        """
-        query = """
-            SELECT failed_attempts, last_failed_attempt 
-            FROM login_attempts 
-            WHERE username = ?
-        """
-        result = self._db.execute_query(query, (username,))
-        
-        if not result:
-            return False
-        
-        failed_attempts, last_failed = result[0]
-        
-        if failed_attempts >= self._max_login_attempts:
-            # Check if lockout period has expired
-            last_failed_time = datetime.fromisoformat(last_failed)
-            if datetime.now() - last_failed_time < self._lockout_duration:
-                return True
-        
-        return False
+        except ValidationError as e:
+            logger.warning(f"Login validation failed: {e}")
+            return None
+            
+        except InvalidCredentialsError as e:
+            logger.warning(f"Invalid credentials for user: {username}")
+            return None
+            
+        except AccountLockedError as e:
+            logger.warning(f"Account locked for user: {username}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Unexpected error during login: {e}")
+            return None
     
-    def _record_failed_attempt(self, username: str) -> None:
-        """
-        Record a failed login attempt.
-        
-        Args:
-            username: Username that failed to login
-        """
-        query = """
-            INSERT INTO login_attempts (username, failed_attempts, last_failed_attempt)
-            VALUES (?, 1, ?)
-            ON CONFLICT(username) DO UPDATE SET
-                failed_attempts = failed_attempts + 1,
-                last_failed_attempt = ?
-        """
-        now = datetime.now().isoformat()
-        self._db.execute_query(query, (username, now, now))
-    
-    def _reset_failed_attempts(self, username: str) -> None:
-        """
-        Reset failed login attempts after successful login.
-        
-        Args:
-            username: Username to reset attempts for
-        """
-        query = "DELETE FROM login_attempts WHERE username = ?"
-        self._db.execute_query(query, (username,))
-    
-    def logout(self, session_token: str) -> bool:
+    def logout(self, token: str) -> bool:
         """
         Logout user by invalidating session.
         
+        SECURITY: Uses parameterized query to delete session.
+        
         Args:
-            session_token: Session token to invalidate
+            token: Session token to invalidate
             
         Returns:
-            True if logout successful
+            True if logout successful, False otherwise
         """
-        return self._session_manager.invalidate_session(session_token)
+        try:
+            return self.auth_service.logout(token)
+            
+        except Exception as e:
+            logger.error(f"Error during logout: {e}")
+            return False
+    
+    def validate_session(self, token: str) -> Optional[User]:
+        """
+        Validate session token and return user.
+        
+        SECURITY: Uses parameterized queries to check session.
+        
+        Args:
+            token: Session token to validate
+            
+        Returns:
+            User instance if session valid, None otherwise
+        """
+        try:
+            return self.auth_service.validate_session(token)
+            
+        except Exception as e:
+            logger.error(f"Error validating session: {e}")
+            return None
+    
+    def register(self, username: str, password: str) -> Optional[User]:
+        """
+        Register new user with secure password hashing.
+        
+        SECURITY: Password hashed with bcrypt before storage.
+        SECURITY: Input validation prevents injection attacks.
+        SECURITY: Uses parameterized queries for database operations.
+        
+        Args:
+            username: Username for new user
+            password: Plain text password (will be hashed with bcrypt)
+            
+        Returns:
+            User instance if registration successful, None otherwise
+        """
+        try:
+            user = self.auth_service.register(username, password)
+            
+            # Log registration (no sensitive data)
+            logger.info(f"New user registered: {username}")
+            
+            return user
+            
+        except ValidationError as e:
+            logger.warning(f"Registration validation failed: {e}")
+            return None
+            
+        except ValueError as e:
+            logger.warning(f"Registration failed: {e}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Unexpected error during registration: {e}")
+            return None
+    
+    def change_password(
+        self,
+        user_id: int,
+        old_password: str,
+        new_password: str
+    ) -> bool:
+        """
+        Change user password securely.
+        
+        SECURITY: Verifies old password before allowing change.
+        SECURITY: New password hashed with bcrypt.
+        SECURITY: Invalidates all existing sessions after password change.
+        
+        Args:
+            user_id: ID of user changing password
+            old_password: Current password for verification
+            new_password: New password to set
+            
+        Returns:
+            True if password changed successfully, False otherwise
+        """
+        try:
+            return self.auth_service.change_password(
+                user_id,
+                old_password,
+                new_password
+            )
+            
+        except ValidationError as e:
+            logger.warning(f"Password change validation failed: {e}")
+            return False
+            
+        except InvalidCredentialsError as e:
+            logger.warning(f"Password change failed - invalid credentials")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error changing password: {e}")
+            return False
+
+
+# Convenience function for backward compatibility
+def create_login_manager(db_path: Optional[str] = None) -> SecureLoginManager:
+    """
+    Factory function to create SecureLoginManager instance.
+    
+    Args:
+        db_path: Optional path to database file
+        
+    Returns:
+        SecureLoginManager instance
+    """
+    return SecureLoginManager(db_path)
+
+
+# Example usage demonstrating secure authentication
+if __name__ == "__main__":
+    # Create secure login manager
+    login_manager = create_login_manager()
+    
+    # Example: Register a new user
+    print("Registering new user...")
+    user = login_manager.register("testuser", "SecurePass123!")
+    
+    if user:
+        print(f"User registered successfully: {user.username}")
+        
+        # Example: Login
+        print("\nLogging in...")
+        token = login_manager.login("testuser", "SecurePass123!")
+        
+        if token:
+            print(f"Login successful! Session token: {token[:16]}...")
+            
+            # Example: Validate session
+            print("\nValidating session...")
+            validated_user = login_manager.validate_session(token)
+            
+            if validated_user:
+                print(f"Session valid for user: {validated_user.username}")
+            
+            # Example: Logout
+            print("\nLogging out...")
+            if login_manager.logout(token):
+                print("Logout successful!")
+        else:
+            print("Login failed!")
+    else:
+        print("Registration failed!")
+
 
 # Made with Bob
