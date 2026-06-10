@@ -245,31 +245,31 @@ jobs:
           max_attempts: 3
           retry_wait_seconds: 10
           command: |
-            # Read labels and files info
-            LABELS_INFO=$(cat /tmp/labels_info.txt)
-            FILES_INFO=$(cat /tmp/files_info.txt)
-            
-            PR_TITLE="${{ steps.get_pr.outputs.pr_title }}"
-            PR_BODY="${{ steps.get_pr.outputs.pr_body }}"
-            PR_AUTHOR="${{ steps.get_pr.outputs.pr_author }}"
-            EXISTING_LABELS="${{ steps.pr_details.outputs.existing_labels }}"
-            
             # Create a comprehensive prompt for Bob Shell
-            PROMPT="Analyze this pull request and suggest relevant labels from the available repository labels.
+            cat > /tmp/prompt.txt << 'PROMPT_EOF'
+            Analyze this pull request and suggest relevant labels from the available repository labels.
 
             **Pull Request Information:**
             - **Number**: #${{ steps.get_pr.outputs.pr_number }}
-            - **Title**: ${PR_TITLE}
-            - **Author**: @${PR_AUTHOR}
-            - **Description**: ${PR_BODY}
+            - **Title**: ${{ steps.get_pr.outputs.pr_title }}
+            - **Author**: @${{ steps.get_pr.outputs.pr_author }}
+            - **Description**: ${{ steps.get_pr.outputs.pr_body }}
 
-            **Existing Labels**: ${EXISTING_LABELS:-None}
+            **Existing Labels**: ${{ steps.pr_details.outputs.existing_labels }}
 
             **Changed Files** (${{ steps.pr_details.outputs.file_count }} files):
-            ${FILES_INFO}
+            PROMPT_EOF
+            
+            cat /tmp/files_info.txt >> /tmp/prompt.txt
+            
+            cat >> /tmp/prompt.txt << 'PROMPT_EOF'
 
             **Available Repository Labels** (${{ steps.fetch_labels.outputs.label_count }} labels):
-            ${LABELS_INFO}
+            PROMPT_EOF
+            
+            cat /tmp/labels_info.txt >> /tmp/prompt.txt
+            
+            cat >> /tmp/prompt.txt << 'PROMPT_EOF'
 
             **Instructions:**
             1. Analyze the PR title, description, and changed files
@@ -287,11 +287,12 @@ jobs:
             label-name-2
             label-name-3
 
-            Suggested labels:"
+            Suggested labels:
+            PROMPT_EOF
 
             # Run Bob Shell and capture output
             # --accept-license: required on first run in a fresh CI environment
-            BOB_OUTPUT=$(bob --accept-license -p "${PROMPT}" 2>&1)
+            BOB_OUTPUT=$(bob --accept-license -p "$(cat /tmp/prompt.txt)" 2>&1)
             
             echo "Bob Shell output:"
             echo "${BOB_OUTPUT}"
